@@ -15,6 +15,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Linq;
+using InTheHand.Net.Obex;
 
 namespace InTheHand.Net
 {
@@ -461,14 +462,14 @@ namespace InTheHand.Net
             ns.Write(connectPacket, 0, connectPacketLength);
 
             byte[] receivePacket = new byte[3];
-            StreamReadBlockMust(ns, receivePacket, 0, 3);
+            ObexHelpers.StreamReadBlockMust(ns, receivePacket, 0, 3);
             if (receivePacket[0] == (byte)(ObexStatusCode.OK | ObexStatusCode.Final)) {
                 // get length
                 short len = (short)(IPAddress.NetworkToHostOrder(BitConverter.ToInt16(receivePacket, 1)) - 3);
 
                 byte[] receivePacket2 = new byte[3 + len];
                 Buffer.BlockCopy(receivePacket, 0, receivePacket2, 0, 3);
-                StreamReadBlockMust(ns, receivePacket2, 3, len);
+                ObexHelpers.StreamReadBlockMust(ns, receivePacket2, 3, len);
                 ObexParser.ParseHeaders(receivePacket2, true, ref remoteMaxPacket, null, Headers);
                 if (Headers["CONNECTIONID"] != null) {
                     connectionId = int.Parse(Headers["CONNECTIONID"]);
@@ -592,6 +593,10 @@ namespace InTheHand.Net
         }
         #endregion
 
+        #region AppParameters
+        public ObexAppParameters AppParameters { get; set; }
+        #endregion
+
         #region DoPut
         private ObexStatusCode DoPut()
         {
@@ -652,10 +657,10 @@ namespace InTheHand.Net
                 BitConverter.GetBytes(IPAddress.HostToNetworkOrder(Convert.ToInt32(ContentLength))).CopyTo(buffer, packetLength + 1);
                 packetLength += 5;
             }
-            if (Headers["AppParameters"] != null)
+            if (AppParameters != null)
             {
                 buffer[packetLength] = (byte)ObexHeader.AppParameters;
-                byte[] headerValue = { 0xe, 1, 0xb1 };// System.Text.Encoding.ASCII.GetBytes(Headers["AppParameters"]);
+                byte[] headerValue = AppParameters.GetHeaderBytes();
                 BitConverter.GetBytes(IPAddress.HostToNetworkOrder((short)(headerValue.Length + 3))).CopyTo(buffer, packetLength + 1);
                 headerValue.CopyTo(buffer, packetLength + 3);
                 packetLength += 3 + headerValue.Length;
@@ -802,7 +807,7 @@ namespace InTheHand.Net
                 // Send then Receive
                 ns.Write(buffer, 0, bufferlen);
                 //
-                StreamReadBlockMust(ns, buffer, 0, 3);
+                ObexHelpers.StreamReadBlockMust(ns, buffer, 0, 3);
                 int bytesread = 3;
                 //get code
                 sc = (ObexStatusCode)buffer[0];
@@ -810,7 +815,7 @@ namespace InTheHand.Net
                 short len = (short)IPAddress.NetworkToHostOrder(BitConverter.ToInt16(buffer, 1));
                 Debug.Assert(len > 0, "not got len!");
                 //read all of packet
-                StreamReadBlockMust(ns, buffer, bytesread, len - bytesread);
+                ObexHelpers.StreamReadBlockMust(ns, buffer, bytesread, len - bytesread);
                 ObexParser.ParseHeaders(buffer, false, ref remoteMaxPacket, ms, headers);
 
                 //prepare the next request
@@ -862,14 +867,14 @@ namespace InTheHand.Net
             // Send then Receive
             ns.Write(buffer, 0, bufferlen);
             //
-            StreamReadBlockMust(ns, buffer, 0, 3);
+            ObexHelpers.StreamReadBlockMust(ns, buffer, 0, 3);
             int bytesread = 3;
             //get code
             sc = (ObexStatusCode)buffer[0];
 
             // Read optional response headers regardless of the status code.
             short len = (short)(IPAddress.NetworkToHostOrder(BitConverter.ToInt16(buffer, 1)) - 3);
-            StreamReadBlockMust(ns, buffer, bytesread, len);
+            ObexHelpers.StreamReadBlockMust(ns, buffer, bytesread, len);
         }
 
         #region Check Response
@@ -878,7 +883,7 @@ namespace InTheHand.Net
             if (isConnectResponse)
                 throw new ArgumentException("CheckResponse does not know how to parse the connect response");
             byte[] receiveBuffer = new byte[3];
-            StreamReadBlockMust(ns, receiveBuffer, 0, receiveBuffer.Length);
+            ObexHelpers.StreamReadBlockMust(ns, receiveBuffer, 0, receiveBuffer.Length);
 
             status = (ObexStatusCode)receiveBuffer[0];
 
@@ -894,7 +899,7 @@ namespace InTheHand.Net
                     if (len > 0) 
                     {
                         byte[] receivePacket2 = new byte[len];
-                        StreamReadBlockMust(ns, receivePacket2, 0, len);
+                        ObexHelpers.StreamReadBlockMust(ns, receivePacket2, 0, len);
                         bool validObexHeader = false;
                         if ((ObexHeader)receivePacket2[0] == ObexHeader.ConnectionID) 
                         {
@@ -1072,38 +1077,6 @@ namespace InTheHand.Net
             return new ObexWebResponse(ms, responseHeaders, status);
         }
         #endregion
-
-        /// <summary>
-        /// A wrapper for Stream.Read that blocks until the requested number of bytes
-        /// have been read, and throw an exception if the stream is closed before that occurs.
-        /// </summary>
-        private static void StreamReadBlockMust(Stream stream, byte[] buffer, int offset, int size)
-        {
-            int numRead = StreamReadBlock(stream, buffer, offset, size);
-            System.Diagnostics.Debug.Assert(numRead <= size);
-            if (numRead < size) {
-                throw new EndOfStreamException("Connection closed whilst reading an OBEX packet.");
-            }
-        }
-
-        /// <summary>
-        /// A wrapper for Stream.Read that blocks until the requested number of bytes
-        /// have been read or the end of the Stream has been reached.
-        /// Returns the number of bytes read.
-        /// </summary>
-        private static int StreamReadBlock(Stream stream, byte[] buffer, int offset, int size)
-        {
-            int numRead = 0;
-            while (size - numRead > 0) {
-                int curCount = stream.Read(buffer, offset + numRead, size - numRead);
-                if (curCount == 0) { // EoF
-                    break;
-                }
-                numRead += curCount;
-            }
-            System.Diagnostics.Debug.Assert(numRead <= size);
-            return numRead;
-        }
 
         /// <summary>
         /// Begins a request for a OBEX server response.
